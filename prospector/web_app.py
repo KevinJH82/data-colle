@@ -50,24 +50,6 @@ logger = get_logger("web")
 # 任务状态存储（内存 + 磁盘持久化）
 tasks: dict = {}
 
-# 项目存储
-projects_file = OUTPUT_DIR / 'projects.json'
-
-
-def _load_projects() -> list:
-    if projects_file.exists():
-        try:
-            with open(projects_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
-
-
-def _save_projects(projects: list) -> None:
-    with open(projects_file, 'w', encoding='utf-8') as f:
-        json.dump(projects, f, ensure_ascii=False, indent=2)
-
 
 # 后台线程池（限制最大并发数）
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
@@ -502,51 +484,6 @@ def api_download_file(task_id, filepath):
 def api_minerals():
     """列出支持的矿种"""
     return jsonify({'minerals': list_all_minerals()})
-
-
-# ============================================================
-# 项目管理 API
-# ============================================================
-
-@app.route('/api/projects', methods=['GET'])
-def api_list_projects():
-    """列出所有项目"""
-    projects = _load_projects()
-    # 统计每个项目的任务数
-    for p in projects:
-        p['task_count'] = sum(1 for t in tasks.values() if t.get('project_id') == p['id'])
-    return jsonify({'projects': projects})
-
-
-@app.route('/api/projects', methods=['POST'])
-def api_create_project():
-    """创建新项目"""
-    data = request.get_json(force=True)
-    name = data.get('name', '').strip()
-    if not name:
-        return jsonify({'error': '项目名称不能为空'}), 400
-
-    projects = _load_projects()
-    pid = uuid.uuid4().hex[:8]
-    project = {
-        'id': pid,
-        'name': name,
-        'description': data.get('description', ''),
-        'created_at': datetime.now().isoformat(),
-    }
-    projects.append(project)
-    _save_projects(projects)
-    logger.info("创建项目: %s (%s)", name, pid)
-    return jsonify(project), 201
-
-
-@app.route('/api/projects/<project_id>', methods=['DELETE'])
-def api_delete_project(project_id):
-    """删除项目（仅删除关联关系，不删除任务数据）"""
-    projects = _load_projects()
-    projects = [p for p in projects if p['id'] != project_id]
-    _save_projects(projects)
-    return jsonify({'status': 'deleted'})
 
 
 @app.route('/api/parse-roi', methods=['POST'])

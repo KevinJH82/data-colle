@@ -68,15 +68,6 @@
 
     <div class="row g-3">
       <div class="col-md-3">
-        <label class="form-label text-muted small">📁 归属项目</label>
-        <div class="d-flex gap-1">
-          <select id="projectSelect" class="form-select bg-dark text-light border-secondary form-select-sm">
-            <option value="">无（独立任务）</option>
-          </select>
-          <button class="btn btn-sm btn-outline-secondary flex-shrink-0" onclick="createProject()" title="新建项目">+</button>
-        </div>
-      </div>
-      <div class="col-md-3">
         <label class="form-label text-muted small">🎯 目标矿种</label>
         <select id="mineralSelect" class="form-select bg-dark text-light border-secondary">
           {% for m in minerals %}
@@ -183,11 +174,9 @@
 <script src="/static/js/history.js"></script>
 <script src="/static/js/map.js"></script>
 <script src="/static/js/charts.js"></script>
-<script src="/static/js/projects.js"></script>
 <script>
   initUpload();
   refreshHistory();
-  loadProjects();
 </script>
 </body>
 </html>

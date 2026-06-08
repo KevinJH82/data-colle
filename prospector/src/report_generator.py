@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
+from urllib.parse import quote
 
 from .logger import get_logger
 from config import MYMEMORY_URL
@@ -539,7 +540,8 @@ def generate_report(
     papers = live_data.get("papers", []) if live_data else []
     if papers:
         _rpt_log.info("开始生成论文部分: %d 篇论文", len(papers))
-        report += f"> 自动检索 OpenAlex + Semantic Scholar，针对 **{tu_name}** + **{mineral}**\n\n"
+        report += f"> 自动检索 OpenAlex + Semantic Scholar，针对 **{tu_name}** + **{mineral}**。\n"
+        report += "> 摘要来自数据库，**全文受版权限制无法内嵌，请点击下方链接到出版方/DOI 查看**。\n\n"
         for i, p in enumerate(papers[:15], 1):
             authors = ", ".join(p.get("authors", [])[:3])
             cited = p.get("citation_count") or p.get("cited_by") or 0
@@ -558,14 +560,23 @@ def generate_report(
                 ab_cn = _translate_en_to_cn(ab)
             _rpt_log.debug("论文 %d/%d 完成", i, min(len(papers), 15))
 
-            report += f"{i}. **[{p.get('year','?')}] {title}**\n"
+            # 溯源链接：有 DOI/出处则给原文链接；并始终给百度学术按标题检索（中文论文兜底）
+            links = []
+            src_url = p.get("url", "")
+            if src_url:
+                links.append(f"[原文/DOI]({src_url})")
+            if title:
+                links.append(f"[百度学术](https://xueshu.baidu.com/s?wd={quote(title)})")
+            link_str = "　（" + " · ".join(links) + "）" if links else ""
+
+            report += f"{i}. **[{p.get('year','?')}] {title}**{link_str}\n"
             if title_cn and title_cn != title:
                 report += f"   *{title_cn}*\n"
             report += f"   *{authors}* | 引用 {cited}\n"
             if ab_cn and ab_cn != ab:
-                report += f"   > {ab_cn[:250]}\n"
+                report += f"   > {ab_cn}\n"
             elif ab:
-                report += f"   > {ab[:250]}\n"
+                report += f"   > {ab}\n"
             report += "\n"
     else:
         report += (f"> 本次未自动检索到 {tu_name + ' ' if tu_name else ''}{mineral} 相关论文，"

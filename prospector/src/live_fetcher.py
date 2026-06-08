@@ -53,14 +53,22 @@ def search_papers_openalex(
             ]
             # OpenAlex 的 abstract 是 inverted_index dict，需转换
             abstract = _decode_openalex_abstract(r.get("abstract_inverted_index"))
+            # OpenAlex 的 doi 字段通常已是完整 URL（https://doi.org/...），避免重复拼前缀
+            doi = r.get("doi") or ""
+            if doi.startswith("http"):
+                doi_url = doi
+            elif doi:
+                doi_url = f"https://doi.org/{doi}"
+            else:
+                doi_url = ""
             papers.append({
                 "title": r.get("title", ""),
                 "year": r.get("publication_year"),
                 "authors": authors[:5],
-                "doi": r.get("doi", ""),
+                "doi": doi,
                 "cited_by": r.get("cited_by_count", 0),
-                "abstract": _truncate(abstract, 300),
-                "url": f"https://doi.org/{r['doi']}" if r.get("doi") else "",
+                "abstract": _truncate(abstract, 500),
+                "url": doi_url,
             })
 
         logger.info("OpenAlex: %d papers found for '%s...', returning top %d", total, query[:60], len(papers))
@@ -112,7 +120,7 @@ def search_papers_semantic_scholar(
                 "year": r.get("year"),
                 "authors": authors[:5],
                 "citation_count": r.get("citationCount", 0),
-                "abstract": _truncate(r.get("abstract"), 300),
+                "abstract": _truncate(r.get("abstract"), 500),
                 "url": f"https://www.semanticscholar.org/paper/{paper_id}" if paper_id else "",
             })
 
