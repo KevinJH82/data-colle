@@ -165,8 +165,17 @@ def _geophysical_coverage(mineral_info: Dict[str, Any], geophysical: Dict[str, A
     """比对该矿种推荐物探方法与本次实际获取的数据，返回 [(方法, 覆盖状态)]"""
     methods = mineral_info.get('all_geophysical_methods', [])
     has_mag = geophysical.get('magnetic') is not None
-    has_grav = (geophysical.get('gravity') is not None
-                or geophysical.get('icgem') is not None)
+    has_wgm = geophysical.get('gravity') is not None
+    has_icgem = geophysical.get('icgem') is not None
+
+    # 重力状态如实区分 WGM2012（需下载）与 ICGEM（本地计算）
+    if has_wgm:
+        grav_status = "✅ WGM2012 已获取（见下方分布图）"
+    elif has_icgem:
+        grav_status = "✅ ICGEM 已算（见下方分布图）；WGM2012 需手动下载"
+    else:
+        grav_status = "🔗 链接模式（未自动下载）"
+
     rows = []
     for m in sorted(methods):
         # 注意：电法/电磁/激电类需先判定，避免"电磁法"被后面的 '磁' 误匹配为航磁
@@ -177,9 +186,9 @@ def _geophysical_coverage(mineral_info: Dict[str, Any], geophysical: Dict[str, A
         elif '地震' in m:
             status = "❌ 需与矿权/油田方合作或购买（无公开数据）"
         elif '磁' in m or '航磁' in m:
-            status = "✅ 本次已获取（EMAG2 航磁）" if has_mag else "🔗 链接模式（未自动下载）"
+            status = "✅ 本次已获取（EMAG2 航磁，见下方分布图）" if has_mag else "🔗 链接模式（未自动下载）"
         elif '重力' in m:
-            status = "✅ 本次已获取（WGM2012 / ICGEM）" if has_grav else "🔗 链接模式（未自动下载）"
+            status = grav_status
         elif 'DEM' in m:
             status = "✅ 公开 DEM 可下载（见下文）"
         else:
@@ -488,6 +497,17 @@ def generate_report(
         if best_model:
             report += (f"> **如何用于找 {mineral}**：依「{best_model['name']}」模型的密度响应，"
                        f"用重力异常识别隐伏岩体/盆地基底/接触带等控矿要素，与磁法、化探联合解释。\n\n")
+        # --- 嵌入布格重力异常分布图 ---
+        if grav.get('map'):
+            try:
+                map_rel = Path(grav['map']).relative_to(output_dir).as_posix()
+                report += f"![布格重力异常分布图]({map_rel})\n\n"
+                report += (
+                    "*图：ROI 范围内 WGM2012 布格重力异常空间分布（mGal），"
+                    "星标为中心点，黑线为 ROI 边界*\n\n"
+                )
+            except ValueError:
+                pass
     else:
         report += "### 重力数据 🔗 链接模式\n\n"
         for link in geophysical.get('links', []):

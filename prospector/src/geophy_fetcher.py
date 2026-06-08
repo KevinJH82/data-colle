@@ -196,8 +196,19 @@ def download_wgm2012(
         ds.close()
 
         logger.info("重力数据已裁剪: %s", clipped_file)
+
+        # 生成布格重力异常分布图（复用通用栅格绘图，非对称顺序色阶 + mGal）
+        map_path = output_dir / "wgm2012_bouguer_map.png"
+        map_file = _generate_magnetic_map(
+            clipped_file, map_path, roi,
+            title="WGM2012 布格重力异常分布 (mGal)",
+            cmap="viridis", unit="mGal", symmetric=False,
+            value_name="Bouguer Gravity Anomaly",
+        )
+
         return {
             "file": str(clipped_file),
+            "map": map_file,
             "url": WGM2012_BOUGUER_URL,
             "source": "BGI WGM2012 (World Gravity Map)",
             "resolution": "2 arc-minutes (~4 km)",
@@ -312,9 +323,16 @@ def _generate_magnetic_map(
     output_path: Path,
     roi: Dict[str, Any],
     title: str = "EMAG2 v3 磁异常分布 (nT)",
+    cmap: str = "coolwarm",
+    unit: str = "nT",
+    symmetric: bool = True,
+    value_name: str = "Magnetic Anomaly",
 ) -> Optional[str]:
     """
-    生成 ROI 区域内磁异常分布热力图 PNG
+    生成 ROI 区域内栅格（磁/重力等）分布热力图 PNG
+
+    通用栅格热力图：默认参数适配 EMAG2 磁异常（coolwarm 对称色阶, nT）；
+    重力等数据可传 cmap/unit/symmetric/value_name 复用本函数。
 
     从裁剪后的 EMAG2 GeoTIFF 读取数据，用 matplotlib 绘制：
     - coolwarm 色阶热力图（零值居中对称）
@@ -371,7 +389,7 @@ def _generate_magnetic_map(
             val = float(data[0, 0]) if rows >= 1 and cols >= 1 else 0.0
             ax.text(
                 0.5, 0.5,
-                f"Magnetic Anomaly\nat Center Point:\n{val:.1f} nT",
+                f"{value_name}\nat Center Point:\n{val:.1f} {unit}",
                 transform=ax.transAxes, ha='center', va='center',
                 fontsize=14, fontfamily='monospace',
             )
@@ -384,15 +402,22 @@ def _generate_magnetic_map(
         # 5. 绘制热力图
         fig, ax = plt.subplots(figsize=(12, 9), dpi=150)
 
-        # 对称色阶（coolwarm，nT 零值居中）
         vmin = float(np.ma.min(data))
         vmax = float(np.ma.max(data))
-        vlim = max(abs(vmin), abs(vmax))
-        if vlim < 0.1:
-            vlim = 1.0  # 极小区间兜底
+        if symmetric:
+            # 对称色阶（磁异常，零值居中）
+            vlim = max(abs(vmin), abs(vmax))
+            if vlim < 0.1:
+                vlim = 1.0  # 极小区间兜底
+            lo, hi = -vlim, vlim
+        else:
+            # 顺序色阶（布格重力异常多为负值区间，按实际范围着色）
+            if abs(vmax - vmin) < 0.1:
+                vmin, vmax = vmin - 1.0, vmax + 1.0
+            lo, hi = vmin, vmax
 
-        im = ax.pcolormesh(lon, lat, data, cmap='coolwarm',
-                           vmin=-vlim, vmax=vlim, shading='auto')
+        im = ax.pcolormesh(lon, lat, data, cmap=cmap,
+                           vmin=lo, vmax=hi, shading='auto')
 
         # 6. 叠加原始 ROI 边界
         try:
@@ -418,7 +443,7 @@ def _generate_magnetic_map(
 
         # 8. 色棒 / 网格 / 标签
         cbar = fig.colorbar(im, ax=ax, shrink=0.75, pad=0.02)
-        cbar.set_label('Magnetic Anomaly (nT)', fontsize=10)
+        cbar.set_label(f'{value_name} ({unit})', fontsize=10)
         ax.set_xlabel('Longitude')
         ax.set_ylabel('Latitude')
         ax.set_title(title)
