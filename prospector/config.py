@@ -11,7 +11,7 @@ CACHE_DIR = BASE_DIR / "cache"
 
 # ── Flask ──
 HOST = "0.0.0.0"
-PORT = 8080
+PORT = 8085
 DEBUG = True
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 

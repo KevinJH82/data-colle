@@ -1,3 +1,7 @@
+# Web 框架
+flask>=3.0.0
+
+# 数据处理 / 地理空间
 geopandas>=0.14.0
 shapely>=2.0.0
 fiona>=1.9.0
