@@ -1,4 +1,4 @@
-"""报告生成器 — ROI 针对性报告，非通用科普"""
+"""报告生成器 — ROI 针对性报告，围绕目标矿种成矿模型展开（非通用科普）"""
 
 import json
 import re
@@ -76,6 +76,204 @@ def _format_links(links: list) -> str:
     return "\n".join(lines)
 
 
+# ============================================================
+# 矿种主线辅助：成矿模型匹配、元素角色、物探覆盖度
+# ============================================================
+
+# 元素符号 → 中文名（用于矿种匹配与展示）
+_ELEMENT_CN = {
+    'Cu': '铜', 'Au': '金', 'Ag': '银', 'Fe': '铁', 'Pb': '铅', 'Zn': '锌',
+    'W': '钨', 'Sn': '锡', 'Mo': '钼', 'Li': '锂', 'Co': '钴', 'Ni': '镍',
+    'Sb': '锑', 'Hg': '汞', 'Al': '铝', 'U': '铀', 'Cr': '铬', 'Mn': '锰',
+    'REE': '稀土', 'P': '磷', 'Nb': '铌', 'Ta': '钽', 'V': '钒', 'Ti': '钛',
+    'Pt': '铂', 'Pd': '钯', 'Rh': '铑', 'Ru': '钌', 'Ir': '铱', 'Os': '锇',
+    'F': '氟', 'C': '碳', 'Ba': '钡', 'As': '砷', 'Bi': '铋', 'Be': '铍',
+    'Te': '碲', 'Se': '硒', 'Tl': '铊', 'Ga': '镓', 'Ge': '锗', 'Cd': '镉',
+    'Re': '铼', 'Rb': '铷', 'Cs': '铯', 'B': '硼', 'Sr': '锶', 'Zr': '锆',
+    'Y': '钇', 'La': '镧', 'Ce': '铈', 'Nd': '钕', 'Si': '硅', 'Mg': '镁',
+    'Ca': '钙', 'Na': '钠', 'K': '钾', 'S': '硫',
+    'Oil': '石油', 'Gas': '天然气', 'Coal': '煤',
+}
+
+# 构造背景同义词分组（成矿模型的 tectonic_setting 与本区构造单元 features 用词
+# 常不同字面、但指同一类构造环境，故按"构造要素组"匹配，而非逐字匹配）
+_SETTING_GROUPS = {
+    "汇聚/碰撞造山环境": ["汇聚", "会聚", "碰撞", "造山", "岛弧", "陆缘弧",
+                          "俯冲", "缝合带", "增生", "弧"],
+    "裂谷/伸展环境": ["裂谷", "拗拉槽", "坳拉槽", "陆内裂陷", "伸展"],
+    "沉积盆地": ["盆地", "坳陷", "断陷", "前陆", "拗陷"],
+    "被动陆缘": ["被动陆缘", "被动大陆边缘"],
+    "克拉通/稳定陆块": ["克拉通", "地台", "古老陆块", "稳定", "太古", "元古", "基底"],
+    "中酸性岩浆/花岗岩": ["花岗岩", "伟晶岩", "中酸性", "斑岩", "酸性岩", "S型"],
+    "基性-超基性/层状侵入": ["超基性", "基性", "层状侵入", "蛇绿岩", "辉长"],
+    "碳酸盐岩/接触带": ["碳酸盐岩", "灰岩", "白云岩", "接触带", "矽卡", "台地"],
+    "火山活动": ["火山", "破火山口"],
+    "风化壳/表生富集": ["风化壳", "红土", "风化", "淋滤"],
+    "变质/剪切带": ["变质", "剪切带", "绿岩带", "片岩", "片麻岩"],
+}
+
+
+def _setting_tokens(text: str) -> set:
+    """从一段地质描述中提取所属的'构造要素组'标签集合"""
+    text = text or ""
+    groups = set()
+    for label, kws in _SETTING_GROUPS.items():
+        if any(kw in text for kw in kws):
+            groups.add(label)
+    return groups
+
+
+def _rank_metallogenic_types(mineral_info: Dict[str, Any], location: Optional[Dict]):
+    """按与 ROI 构造背景的吻合度对成矿类型排序。
+
+    Returns:
+        (ranked, ctx_tokens)
+        ranked: [(mt, score, sorted_matched_keywords), ...]，吻合度高者在前
+        ctx_tokens: 本区构造单元提取出的关键词集合
+    """
+    tu = location.get('center_tectonic') if location else None
+    context = ""
+    if tu:
+        context = f"{tu.get('name', '')} {tu.get('features', '')}"
+    ctx_tokens = _setting_tokens(context)
+
+    ranked = []
+    for mt in mineral_info.get('metallogenic_types', []):
+        mt_tokens = _setting_tokens(mt.get('tectonic_setting', ''))
+        matched = ctx_tokens & mt_tokens
+        ranked.append((mt, len(matched), sorted(matched)))
+    # 稳定排序：吻合度降序，原顺序为次序（Python sort 稳定）
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    return ranked, ctx_tokens
+
+
+def _primary_symbols(mineral: str, key_elements: list) -> list:
+    """从指示元素中挑出'直接指示元素'（其中文名是矿种名子串者）。
+
+    例：铜→[Cu]；铅锌→[Pb, Zn]；钨锡→[W, Sn]。
+    """
+    prim = []
+    for e in key_elements:
+        cn = _ELEMENT_CN.get(e, '')
+        if cn and (cn in mineral or mineral in cn):
+            prim.append(e)
+    return prim
+
+
+def _geophysical_coverage(mineral_info: Dict[str, Any], geophysical: Dict[str, Any]) -> list:
+    """比对该矿种推荐物探方法与本次实际获取的数据，返回 [(方法, 覆盖状态)]"""
+    methods = mineral_info.get('all_geophysical_methods', [])
+    has_mag = geophysical.get('magnetic') is not None
+    has_grav = (geophysical.get('gravity') is not None
+                or geophysical.get('icgem') is not None)
+    rows = []
+    for m in sorted(methods):
+        # 注意：电法/电磁/激电类需先判定，避免"电磁法"被后面的 '磁' 误匹配为航磁
+        if any(k in m for k in ['IP', '激电', 'CSAMT', 'MT', '电磁', '电法', '大地电磁']):
+            status = "❌ 需野外自行采集（无公开数据）"
+        elif '放射性' in m or 'γ' in m or '能谱' in m or '氡' in m:
+            status = "❌ 需航空/地面伽马能谱测量（无公开数据）"
+        elif '地震' in m:
+            status = "❌ 需与矿权/油田方合作或购买（无公开数据）"
+        elif '磁' in m or '航磁' in m:
+            status = "✅ 本次已获取（EMAG2 航磁）" if has_mag else "🔗 链接模式（未自动下载）"
+        elif '重力' in m:
+            status = "✅ 本次已获取（WGM2012 / ICGEM）" if has_grav else "🔗 链接模式（未自动下载）"
+        elif 'DEM' in m:
+            status = "✅ 公开 DEM 可下载（见下文）"
+        else:
+            status = "🔗 需自行获取"
+        rows.append((m, status))
+    return rows
+
+
+def _render_spine(
+    mineral: str,
+    mineral_info: Dict[str, Any],
+    location: Optional[Dict],
+    ranked: list,
+    is_oil: bool,
+    pb: Optional[Dict],
+):
+    """生成"目标矿种成矿分析"主线章节，返回 (markdown, best_model)"""
+    tu = location.get('center_tectonic') if location else None
+    md = ""
+
+    # --- 构造适宜性结论：把矿种与本区构造背景直接挂钩 ---
+    if tu:
+        major_cn = sorted({_ELEMENT_CN.get(m, m) for m in tu.get('major_minerals', [])})
+        in_catalog = any((mineral in m or m in mineral) for m in major_cn)
+        if in_catalog:
+            verdict = f"✅ **构造背景有利** —— {mineral} 属于 {tu['name']} 已知主要矿产"
+        else:
+            verdict = (f"⚠️ **需进一步评估** —— {mineral} 不在 {tu['name']} 主要矿产目录中，"
+                       f"须结合下列成矿模型与本区具体地质条件论证")
+        md += (f"本报告围绕目标矿种 **{mineral}** 展开。ROI 位于 **{tu['name']}**"
+               f"（{tu.get('features', '')}），该单元已知主要矿产为 "
+               f"{', '.join(major_cn)}。\n\n{verdict}。\n\n")
+    else:
+        md += (f"本报告围绕目标矿种 **{mineral}** 展开。ROI 未落入已识别构造单元"
+               f"（可能在海域或境外），以下成矿模型供通用参考，吻合度未做本区校正。\n\n")
+
+    if not ranked:
+        md += "_知识库中暂无该矿种的成矿模型记录，下列章节按通用框架组织。_\n\n"
+        return md, None
+
+    best_model = ranked[0][0]
+
+    md += (f"下列 {len(ranked)} 种 **{mineral}** 成矿模型按与本区构造背景的吻合度排序，"
+           f"**第一项为最契合本区的模型**；后续化探、物探、结论各章节均围绕它展开：\n\n")
+
+    for idx, (mt, score, matched) in enumerate(ranked):
+        if idx == 0 and score > 0:
+            tag = "✅ 本区最契合模型"
+        elif idx == 0:
+            tag = "参考模型（与本区构造无直接关键词匹配，需论证）"
+        else:
+            tag = "候选模型"
+        if matched:
+            fit = f"匹配（与本区共有构造要素：{', '.join(matched)}）"
+        else:
+            fit = "与本区构造要素无直接关键词匹配，需结合实际地质背景论证"
+
+        md += f"""### {idx + 1}. {mt['name']} — {tag}
+
+| 要素 | 内容 |
+|------|------|
+| **构造背景** | {mt.get('tectonic_setting', '')} |
+| **与本区吻合度** | {fit} |
+| **赋矿围岩** | {mt.get('host_rocks', '')} |
+| **蚀变分带** | {mt.get('alteration', '')} |
+| **指示元素组合** | {mt.get('element_association', '')} |
+"""
+        if not is_oil:
+            key_elems = mt.get('key_elements', [])
+            prim = _primary_symbols(mineral, key_elems)
+            prim_str = ', '.join(prim) if prim else (key_elems[0] if key_elems else '—')
+            path = [e for e in key_elems if e not in prim]
+            md += (f"| **直接指示元素** | {prim_str} |\n"
+                   f"| **前缘/晕(pathfinder)元素** | {', '.join(path) if path else '—'} |\n")
+        md += (f"| **物探响应特征** | {mt.get('geophysical_anomalies', '')} |\n"
+               f"| **推荐物探方法** | {', '.join(mt.get('geophysical_methods', []))} |\n\n")
+
+    # --- 油气：六大要素 + 盆地匹配（围绕成藏模型展开）---
+    if is_oil:
+        six = mineral_info.get('six_elements', [])
+        if six:
+            md += "### 油气成藏关键要素（六要素框架）\n\n"
+            for se in six:
+                md += f"- **{se['element']}**: {se['description']}（关键参数: {se['key_params']}）\n"
+            md += "\n"
+        if pb:
+            md += f"### {pb['name']} — 该盆地已知成藏特征\n\n"
+            md += f"- **面积**: {pb['area_km2']:,} km²\n"
+            md += f"- **主要成藏组合**: {', '.join(pb['main_plays'])}\n"
+            md += f"- **最深钻井**: {pb['max_well_depth']} m\n"
+            md += f"- **建议检索**: 在 CNKI/万方 检索 '{pb['name']} {mineral} 成藏'\n\n"
+
+    return md, best_model
+
+
 def generate_report(
     roi: Dict[str, Any],
     mineral: str,
@@ -88,7 +286,7 @@ def generate_report(
     live_data: Optional[Dict] = None,
     output_dir: Optional[Path] = None,
 ) -> str:
-    """生成 ROI 针对性 Markdown 报告"""
+    """生成 ROI 针对性 Markdown 报告（以目标矿种成矿模型为主线）"""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -99,6 +297,11 @@ def generate_report(
     tu = location.get('center_tectonic')
     pb = location.get('petroleum_basin')
     is_oil = mineral in ('石油', '天然气', '油气')
+    tu_name = tu['name'] if tu else ''
+    pb_name = pb['name'] if pb else ''
+
+    # --- 成矿模型主线：与本区构造背景做吻合度匹配，贯穿全文 ---
+    ranked, ctx_tokens = _rank_metallogenic_types(mineral_info, location)
 
     # ============================================================
     report = f"""# 🏔️ 矿产勘查前期资料收集报告
@@ -107,7 +310,7 @@ def generate_report(
 
 ---
 
-## 一、ROI 位置
+## 一、ROI 位置与构造归属
 
 | 项目 | 内容 |
 |------|------|
@@ -143,16 +346,9 @@ def generate_report(
         report += """| **含油气盆地** | ⚠️ ROI 不在已知主要含油气盆地范围内 |
 """
 
-    # --- 矿种在该单元的潜力 ---
-    if tu and mineral not in ('石油', '天然气', '油气'):
-        major = tu.get('major_minerals', [])
-        element_to_chinese = {
-            'Cu': '铜', 'Au': '金', 'Ag': '银', 'Fe': '铁', 'Pb': '铅', 'Zn': '锌',
-            'W': '钨', 'Sn': '锡', 'Mo': '钼', 'Li': '锂', 'Co': '钴', 'Ni': '镍',
-            'Sb': '锑', 'Hg': '汞', 'Al': '铝', 'U': '铀', 'Cr': '铬', 'Mn': '锰',
-            'REE': '稀土', 'P': '磷', 'Oil': '石油', 'Gas': '天然气', 'Coal': '煤',
-        }
-        major_cn = {element_to_chinese.get(m, m) for m in major}
+    # --- 矿种在该单元的潜力（速览标志，详见第二节）---
+    if tu and not is_oil:
+        major_cn = {_ELEMENT_CN.get(m, m) for m in tu.get('major_minerals', [])}
         mineral_match = [m for m in major_cn if mineral in m or m in mineral]
         if mineral_match:
             report += f"""|
@@ -163,9 +359,18 @@ def generate_report(
 | **矿种匹配** | ⚠️ '{mineral}' 不在 {tu['name']} 主要矿产目录中，需结合具体成矿条件评估 |
 """
 
-    report += "\n---\n\n## 二、该区域元素地球化学背景\n\n"
+    # ============================================================
+    # 二、目标矿种成矿分析（全报告主线）
+    # ============================================================
+    spine_md, best_model = _render_spine(mineral, mineral_info, location, ranked, is_oil, pb)
+    report += f"\n---\n\n## 二、目标矿种成矿分析（{mineral}）\n\n"
+    report += spine_md
 
-    # --- 化探背景值（构造单元特定 vs 全国对比） ---
+    # ============================================================
+    # 三、地球化学背景与元素套合（针对矿种）
+    # ============================================================
+    report += f"\n---\n\n## 三、地球化学背景与元素套合（针对 {mineral}）\n\n"
+
     bgs = geochemical.get('backgrounds', {})
     thresholds = bgs.get('anomaly_thresholds', {})
     source_unit = bgs.get('source_unit', '全国')
@@ -174,7 +379,7 @@ def generate_report(
     if thresholds:
         report += f"""**背景值来源**: {source_unit}（史长义等, 2016）
 
-> 下表给出 **{source_unit}** 的 39 种元素水系沉积物背景值及异常分级。这些数值是你判断"某个化探高值是否构成异常"的定量依据——而非全国平均值。
+> 下表只列出与 **{mineral}** 成矿相关的 **{len(thresholds)} 种指示元素**的水系沉积物背景值及异常分级（已按矿种指示元素筛选，非全套 39 元素）。这些数值是判断"本区某元素化探高值是否构成异常"的定量标尺。
 
 | 元素 | {source_unit}背景值 | 全国背景值 | 弱异常(1.5×) | 中异常(2×) | 强异常(3×) |
 |------|:---:|:---:|:---:|:---:|:---:|
@@ -189,21 +394,48 @@ def generate_report(
             )
         report += "\n"
 
-    # --- 油气专属：六大要素 + 盆地匹配 ---
-    if is_oil:
-        report += "### 油气成藏关键要素（通用框架）\n\n"
-        for se in mineral_info.get('six_elements', []):
-            report += f"- **{se['element']}**: {se['description']}（关键参数: {se['key_params']}）\n"
-
-        if pb:
-            report += f"\n### {pb['name']} — 该盆地已知成藏特征\n\n"
-            report += f"- **面积**: {pb['area_km2']:,} km²\n"
-            report += f"- **主要成藏组合**: {', '.join(pb['main_plays'])}\n"
-            report += f"- **最深钻井**: {pb['max_well_depth']} m\n"
-            report += f"- **建议检索**: 在 CNKI/万方 检索 '{pb['name']} {mineral} 成藏'\n"
+    # --- 异常识别要点：回扣成矿模型的元素套合 ---
+    if best_model and not is_oil:
+        assoc = best_model.get('element_association', '')
+        key_elems = best_model.get('key_elements', [])
+        prim = _primary_symbols(mineral, key_elems)
+        prim_str = ', '.join(prim) if prim else (key_elems[0] if key_elems else mineral)
+        path = [e for e in key_elems if e not in prim]
+        report += f"**🎯 针对 {mineral} 的异常识别要点（依据「{best_model['name']}」模型）**\n\n"
+        report += (f"- 本区找 {mineral} 的核心，是识别 **{assoc}** 这一元素套合，"
+                   f"而非孤立看单元素高值。\n")
+        report += f"- **直接指示元素**：{prim_str} —— 其异常直接反映矿(化)体。\n"
+        if path:
+            report += (f"- **前缘/晕(pathfinder)元素**：{', '.join(path)} —— 常构成矿体的前缘晕/尾晕，"
+                       f"用于追踪隐伏矿体、判断剥蚀程度。\n")
+        report += (f"- 圈靶时应优先关注上述元素 **同时高于中异常(2×)阈值且空间套合** 的地段，"
+                   f"并按 element_association 描述的分带规律（前缘晕→矿体→尾晕）判断矿体产出部位。\n")
+        missing = [e for e in key_elems if e not in thresholds]
+        if missing:
+            report += (f"- ⚠️ 关键指标 {', '.join(missing)} 不在水系沉积物 39 元素背景体系内，"
+                       f"需通过岩石/土壤地球化学或专项测试补充。\n")
         report += "\n"
+    elif is_oil:
+        report += ("**🎯 针对油气的地球化学评价**：常规元素背景值不适用于油气，"
+                   "应改用有机地球化学指标（TOC、Ro、S1+S2、HI 等，见第二节六要素），"
+                   "重点评价烃源岩品质与成熟度。\n\n")
 
-    report += "---\n\n## 三、地球物理数据\n\n"
+    # ============================================================
+    # 四、地球物理数据与矿种响应
+    # ============================================================
+    report += f"---\n\n## 四、地球物理数据与 {mineral} 响应\n\n"
+
+    # --- 本矿种物探响应总述 + 方法覆盖度 ---
+    if best_model and best_model.get('geophysical_anomalies'):
+        report += (f"> **本矿种物探响应特征（「{best_model['name']}」模型）**："
+                   f"{best_model['geophysical_anomalies']}。下方各类数据应据此解读。\n\n")
+    coverage = _geophysical_coverage(mineral_info, geophysical)
+    if coverage:
+        report += "**物探方法覆盖度**（该矿种推荐方法 vs 本次自动获取情况）\n\n"
+        report += "| 推荐物探方法 | 本次覆盖情况 |\n|------|------|\n"
+        for m, status in coverage:
+            report += f"| {m} | {status} |\n"
+        report += "\n"
 
     # --- 磁法 ---
     mag = geophysical.get('magnetic')
@@ -218,6 +450,10 @@ def generate_report(
 | **说明** | 已按 ROI 外扩范围裁剪，可在 QGIS 中与地质图/化探叠合 |
 
 """
+        if best_model:
+            report += (f"> **如何用于找 {mineral}**：结合「{best_model['name']}」模型的磁响应特征，"
+                       f"圈定与成矿相关的磁性/低磁地质体（如岩体、构造带），再与 {mineral} 指示元素"
+                       f"化探套合异常叠合定位靶区。\n\n")
         # --- 嵌入磁异常分布图 ---
         if mag.get('map'):
             try:
@@ -248,6 +484,9 @@ def generate_report(
 | **文件** | `{grav['file']}` |
 
 """
+        if best_model:
+            report += (f"> **如何用于找 {mineral}**：依「{best_model['name']}」模型的密度响应，"
+                       f"用重力异常识别隐伏岩体/盆地基底/接触带等控矿要素，与磁法、化探联合解释。\n\n")
     else:
         report += "### 重力数据 🔗 链接模式\n\n"
         for link in geophysical.get('links', []):
@@ -295,45 +534,45 @@ def generate_report(
         gs = info.get('gscloud_url', '')
         report += f"- **{src}**: [地理空间数据云]({gs})（国内高速）\n"
 
-    tu_name = tu['name'] if tu else ''
-    pb_name = pb['name'] if pb else ''
-
     # --- 实时查询论文 ---
+    report += f"\n---\n\n## 五、区域已发表研究论文\n\n"
+    papers = live_data.get("papers", []) if live_data else []
+    if papers:
+        _rpt_log.info("开始生成论文部分: %d 篇论文", len(papers))
+        report += f"> 自动检索 OpenAlex + Semantic Scholar，针对 **{tu_name}** + **{mineral}**\n\n"
+        for i, p in enumerate(papers[:15], 1):
+            authors = ", ".join(p.get("authors", [])[:3])
+            cited = p.get("citation_count") or p.get("cited_by") or 0
+
+            title = p.get('title', '')
+            ab = p.get("abstract", "")
+
+            # 翻译英文标题和摘要
+            title_cn = ""
+            if _has_en_char(title):
+                _rpt_log.debug("翻译论文 %d 标题...", i)
+                title_cn = _translate_en_to_cn(title)
+            ab_cn = ""
+            if _has_en_char(ab):
+                _rpt_log.debug("翻译论文 %d 摘要...", i)
+                ab_cn = _translate_en_to_cn(ab)
+            _rpt_log.debug("论文 %d/%d 完成", i, min(len(papers), 15))
+
+            report += f"{i}. **[{p.get('year','?')}] {title}**\n"
+            if title_cn and title_cn != title:
+                report += f"   *{title_cn}*\n"
+            report += f"   *{authors}* | 引用 {cited}\n"
+            if ab_cn and ab_cn != ab:
+                report += f"   > {ab_cn[:250]}\n"
+            elif ab:
+                report += f"   > {ab[:250]}\n"
+            report += "\n"
+    else:
+        report += (f"> 本次未自动检索到 {tu_name + ' ' if tu_name else ''}{mineral} 相关论文，"
+                   f"可使用第六节「学术文献」中按构造单元/盆地精准检索的 CNKI 链接深挖前人研究。\n\n")
+
+    # --- ROI 中心物探值 ---
     if live_data:
-        papers = live_data.get("papers", [])
-        if papers:
-            _rpt_log.info("开始生成论文部分: %d 篇论文", len(papers))
-            report += f"\n---\n\n## 四、区域已发表研究论文\n\n"
-            report += f"> 自动检索 OpenAlex + Semantic Scholar，针对 **{tu_name}** + **{mineral}**\n\n"
-            for i, p in enumerate(papers[:15], 1):
-                authors = ", ".join(p.get("authors", [])[:3])
-                cited = p.get("citation_count") or p.get("cited_by") or 0
-
-                title = p.get('title', '')
-                ab = p.get("abstract", "")
-
-                # 翻译英文标题和摘要
-                title_cn = ""
-                if _has_en_char(title):
-                    _rpt_log.debug("翻译论文 %d 标题...", i)
-                    title_cn = _translate_en_to_cn(title)
-                ab_cn = ""
-                if _has_en_char(ab):
-                    _rpt_log.debug("翻译论文 %d 摘要...", i)
-                    ab_cn = _translate_en_to_cn(ab)
-                _rpt_log.debug("论文 %d/%d 完成", i, min(len(papers), 15))
-
-                report += f"{i}. **[{p.get('year','?')}] {title}**\n"
-                if title_cn and title_cn != title:
-                    report += f"   *{title_cn}*\n"
-                report += f"   *{authors}* | 引用 {cited}\n"
-                if ab_cn and ab_cn != ab:
-                    report += f"   > {ab_cn[:250]}\n"
-                elif ab:
-                    report += f"   > {ab[:250]}\n"
-                report += "\n"
-
-        # --- ROI 中心物探值 ---
         rv = live_data.get("raster_values", {})
         if rv.get("magnetic_nt") is not None or rv.get("bouguer_mgal") is not None:
             report += "### ROI 中心点地球物理参数\n\n| 参数 | 数值 | 来源 |\n|------|------|------|\n"
@@ -343,7 +582,10 @@ def generate_report(
                 report += f"| 布格重力异常 | **{rv['bouguer_mgal']} mGal** | WGM2012 |\n"
             report += "\n"
 
-    report += "\n---\n\n## 五、地质资料在线检索\n\n"
+    # ============================================================
+    # 六、地质资料在线检索
+    # ============================================================
+    report += "\n---\n\n## 六、地质资料在线检索\n\n"
 
     report += f"""以下链接已自动带入你的 ROI 坐标和图幅号：
 
@@ -369,7 +611,7 @@ def generate_report(
 
 ---
 
-## 六、遥感数据
+## 七、遥感数据
 
 """
 
@@ -390,30 +632,67 @@ def generate_report(
 ```{remote_sensing.get('aster_info', '')[:500]}...
 ```
 
----
+"""
 
-## 七、数据收集优先级（基于 {tu_name if tu else '通用'} 特征）
+    if best_model and not is_oil and best_model.get('alteration'):
+        report += (f"> **针对 {mineral}**：依「{best_model['name']}」模型，应重点提取以下蚀变矿物组合——"
+                   f"{best_model['alteration']}；用 ASTER/Sentinel-2 做蚀变异常填图，"
+                   f"圈出的蚀变带与化探元素套合、物探异常叠合处即为有利靶区。\n\n")
+
+    report += f"""---
+
+## 八、数据收集优先级（基于 {mineral} × {tu_name if tu else '通用'} 特征）
 
 """
 
     for item in mineral_info.get('recommended_data_priority', []):
         report += f"{item['rank']}. **{item['data']}** → {item['method']}\n"
 
+    # ============================================================
+    # 九、综合结论与靶区建议（模型驱动）
+    # ============================================================
+    report += "\n---\n\n## 九、综合结论与靶区建议\n\n"
+
+    loc_str = f"**{tu_name}**" if tu_name else "本区"
+    if best_model and not is_oil:
+        report += (f"综合上述资料，在 {loc_str} 寻找 **{mineral}**，最可能的成矿模型为 "
+                   f"**{best_model['name']}**。应围绕该模型锁定"
+                   f"「**赋矿围岩 + 蚀变分带 + 元素套合 + 物探响应**」四位一体的找矿靶区：\n\n")
+        report += f"- **赋矿围岩**：{best_model.get('host_rocks', '')}\n"
+        report += f"- **蚀变标志**：{best_model.get('alteration', '')}\n"
+        report += f"- **化探标志**：{best_model.get('element_association', '')}\n"
+        report += f"- **物探标志**：{best_model.get('geophysical_anomalies', '')}\n\n"
+        if tu:
+            major_cn = {_ELEMENT_CN.get(m, m) for m in tu.get('major_minerals', [])}
+            in_catalog = any((mineral in m or m in mineral) for m in major_cn)
+            report += ("> **构造适宜性**：" + (
+                f"{mineral} 属本区已知主要矿产，成矿地质背景有利，可优先投入。\n\n" if in_catalog
+                else f"{mineral} 非本区典型矿种，需以上述四位一体标志严格验证后再决定投入。\n\n"))
+    elif is_oil:
+        report += (f"综合上述资料，在 {loc_str} 开展 **{mineral}** 勘探，应回到成藏六要素"
+                   f"（烃源岩—储层—盖层—圈闭—运移—保存）的有效配置评价"
+                   + (f"，并紧扣 **{pb['name']}** 的已知成藏组合（{', '.join(pb['main_plays'])}）" if pb else "")
+                   + "。\n\n")
+    else:
+        report += f"综合上述资料，在 {loc_str} 寻找 **{mineral}**，建议结合区域地质背景与下列数据综合圈靶。\n\n"
+
+    report += "**下一步工作建议**\n\n"
+    if best_model and not is_oil:
+        report += (f"1. **三重叠合圈靶**：在 QGIS 中将物探异常、{mineral} 指示元素套合化探异常、"
+                   f"有利赋矿围岩/蚀变（{best_model['name']} 模型）三者叠合，圈定优先靶区。\n")
+    else:
+        report += "1. **叠合分析**：在 QGIS 中将物探、化探与地质图叠合，圈定有利部位。\n"
+    report += (f"2. **化探异常验证**：对照第三节 {source_unit}背景值，在 NGAC 化探图中圈出 "
+               f"{mineral} 指示元素高于中异常(2×)阈值的套合区。\n")
+    report += "3. **物探补充**：对照第四节覆盖度表中标 ❌ 的方法（如电法/放射性/地震），按需野外补测。\n"
+    report += (f"4. **文献深挖**：精读第五/六节 {tu_name + ' ' if tu_name else ''}{mineral} 相关前人研究，"
+               f"关注已报道矿化点与异常查证结论。\n")
+    report += "5. **大比例尺数据**：通过 NGAC 线下渠道获取 1:5万 地质图与化探原始点数据。\n"
+
     report += f"""
-
 ---
 
-## 八、下一步工作建议
-
-1. **叠合分析**: 在 QGIS 中将磁法/重力/遥感与地质图叠合，关注 {tu_name + ' 的' if tu else ''}有利构造部位
-2. **化探异常验证**: 对比上表 {source_unit}背景值，在 NGAC 化探图中圈出高于中异常(2×)阈值的区域
-3. **文献深挖**: 逐一阅读上方 CNKI 链接中的前人研究，重点关注已报道的矿化点和异常查证结论
-4. **实地踏勘**: 将"重磁异常 + 化探异常 + 有利地层/构造"三重叠合区列为优先验证靶区
-5. **大比例尺数据**: 通过 NGAC 线下渠道获取 1:5万 地质图和化探原始点数据
-
----
-
-> 📌 本报告由 Prospector 自动生成 | ROI: {roi['center']['lon']:.4f}°E, {roi['center']['lat']:.4f}°N | {tu_name if tu else ''}
+> 📌 本报告由 Prospector 自动生成 | 目标矿种: {mineral} | ROI: {roi['center']['lon']:.4f}°E, {roi['center']['lat']:.4f}°N | {tu_name if tu else ''}
 """
 
     _rpt_log.info("报告内容生成完毕, 开始写入文件...")
@@ -439,6 +718,17 @@ def save_json_summary(
     """保存 JSON 格式摘要"""
     output_dir = Path(output_dir)
 
+    # 成矿模型主线信息（与报告正文一致）
+    ranked, _ = _rank_metallogenic_types(mineral_info, location or {})
+    best = ranked[0] if ranked else None
+    best_model_name = best[0]['name'] if best else None
+    best_fit_score = best[1] if best else 0
+    pathfinder = []
+    if best:
+        ke = best[0].get('key_elements', [])
+        prim = _primary_symbols(mineral, ke)
+        pathfinder = [e for e in ke if e not in prim]
+
     summary = {
         "metadata": {
             "generated_at": datetime.now().isoformat(),
@@ -452,6 +742,12 @@ def save_json_summary(
             "tectonic_unit": location.get('center_tectonic', {}).get('name') if location else None,
             "petroleum_basin": location.get('petroleum_basin', {}).get('name') if location else None,
             "intersecting_units": [i['name'] for i in location.get('intersecting_tectonics', [])] if location else [],
+        },
+        "metallogenic": {
+            "best_model": best_model_name,
+            "best_model_fit_score": best_fit_score,
+            "model_count": len(ranked),
+            "pathfinder_elements": pathfinder,
         },
         "geophysical": {
             "magnetic_downloaded": geophysical.get('magnetic') is not None,
