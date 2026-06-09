@@ -1,13 +1,15 @@
-"""论文 LLM 提炼 — 用 Anthropic Claude 对检索到的论文做围绕 ROI 的找矿导向核心提炼。
+"""论文 LLM 提炼 — 用 DeepSeek（OpenAI 兼容接口）对检索到的论文做围绕 ROI 的找矿导向核心提炼。
 
 约束：只依据给定论文的标题与摘要，不臆造摘要之外的事实；不确定处标注。
-未配置 ANTHROPIC_API_KEY 或未安装 anthropic 时优雅降级（返回 None）。
+未配置 DEEPSEEK_API_KEY 时优雅降级（返回 None），报告保留论文清单。
+经 http_client 直连，无需额外 SDK。
 """
 
 from typing import Dict, Any, List, Optional
 
 from .logger import get_logger
-from config import ANTHROPIC_API_KEY, PAPER_SYNTHESIS_MODEL
+from .http_client import post as http_post
+from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, PAPER_SYNTHESIS_MODEL
 
 logger = get_logger("synth")
 
@@ -21,13 +23,8 @@ def synthesize_papers(
     """围绕 ROI + 构造单元 + 矿种，对论文做核心内容提炼，返回 Markdown；失败/未配置返回 None。"""
     if not papers:
         return None
-    if not ANTHROPIC_API_KEY:
-        logger.info("未配置 ANTHROPIC_API_KEY，跳过论文 LLM 提炼（保留论文列表）")
-        return None
-    try:
-        import anthropic
-    except ImportError:
-        logger.warning("未安装 anthropic，跳过论文 LLM 提炼")
+    if not DEEPSEEK_API_KEY:
+        logger.info("未配置 DEEPSEEK_API_KEY，跳过论文 LLM 提炼（保留论文列表）")
         return None
 
     tu = (location or {}).get("center_tectonic") or {}
@@ -66,18 +63,32 @@ def synthesize_papers(
     )
 
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        resp = client.messages.create(
-            model=PAPER_SYNTHESIS_MODEL,
-            max_tokens=2500,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+        resp = http_post(
+            DEEPSEEK_API_URL,
+            json={
+                "model": PAPER_SYNTHESIS_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_tokens": 2500,
+                "temperature": 0.3,
+                "stream": False,
+            },
+            headers={
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            timeout=120,
         )
-        text = "".join(
-            getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"
-        ).strip()
+        if resp.status_code != 200:
+            logger.warning("DeepSeek API %s: %s", resp.status_code, resp.text[:200])
+            return None
+        data = resp.json()
+        text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
         if text:
-            logger.info("论文 LLM 提炼完成（%d 篇 → %d 字）", len(items), len(text))
+            logger.info("论文 LLM 提炼完成（%d 篇 → %d 字，模型 %s）",
+                        len(items), len(text), PAPER_SYNTHESIS_MODEL)
             return text
         return None
     except Exception as e:

@@ -86,8 +86,10 @@ def download_file(
     except Exception:
         pass
 
+    # 仅记录路径末段、去掉 query（避免 API_Key 等敏感参数进日志）
+    _name = url.split("?")[0].rstrip("/").split("/")[-1] or "file"
     logger.info("开始下载: %s (%s)",
-                url.split("/")[-1],
+                _name,
                 f"{total_size / 1024 / 1024:.0f} MB" if total_size else "未知大小")
 
     response = _session.get(url, stream=True, timeout=timeout)

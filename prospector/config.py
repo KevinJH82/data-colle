@@ -72,10 +72,12 @@ S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 # 翻译
 MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 
-# ── 论文 LLM 提炼（Anthropic Claude）──
+# ── 论文 LLM 提炼（DeepSeek，OpenAI 兼容接口）──
 # 为空则跳过提炼，报告保留论文列表（优雅降级）
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-PAPER_SYNTHESIS_MODEL = os.getenv("PAPER_SYNTHESIS_MODEL", "claude-sonnet-4-6")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
+# deepseek-chat 别名 2026-07-24 后弃用，对应 deepseek-v4-flash；可经环境变量切换
+PAPER_SYNTHESIS_MODEL = os.getenv("PAPER_SYNTHESIS_MODEL", "deepseek-chat")
 
 # ── 清理 ──
 TASK_MAX_AGE_DAYS = 30        # 超过此天数的任务输出目录打印警告

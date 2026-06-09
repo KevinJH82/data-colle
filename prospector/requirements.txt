@@ -23,5 +23,4 @@ matplotlib>=3.7.0
 Pillow>=10.0.0
 deep-translator>=1.11.0
 
-# 论文 LLM 提炼（可选；未配置 ANTHROPIC_API_KEY 时不调用）
-anthropic>=0.40.0
+# 论文 LLM 提炼用 DeepSeek（OpenAI 兼容接口），经 http_client 直连，无需额外 SDK
