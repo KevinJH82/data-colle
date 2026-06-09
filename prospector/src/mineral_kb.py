@@ -796,10 +796,9 @@ def _compute_priority(methods: set) -> list:
         priority.append({"rank": 1, "data": "全球 DEM 数据 (SRTM 30m)", "method": "盆地构造格架地形分析"})
         priority.append({"rank": 2, "data": "全球布格重力异常 (WGM2012)", "method": "盆地基底深度反演、构造单元划分"})
         priority.append({"rank": 3, "data": "全球航磁数据 (EMAG2 v3)", "method": "磁性基底埋深、断裂识别"})
-        priority.append({"rank": 4, "data": "Sentinel-2 / Landsat 遥感", "method": "地表构造解译、油气微渗漏蚀变"})
-        priority.append({"rank": 5, "data": "二维/三维地震数据", "method": "需与油田/矿权方合作获取 (核心数据，网上无公开)"})
-        priority.append({"rank": 6, "data": "测井数据", "method": "需与油田/矿权方合作获取或购买"})
-        priority.append({"rank": 7, "data": "区域地质图 + 盆地分析文献", "method": "NGAC + CNKI 检索"})
+        priority.append({"rank": 4, "data": "二维/三维地震数据", "method": "需与油田/矿权方合作获取 (核心数据，网上无公开)"})
+        priority.append({"rank": 5, "data": "测井数据", "method": "需与油田/矿权方合作获取或购买"})
+        priority.append({"rank": 6, "data": "区域地质图 + 盆地分析文献", "method": "NGAC + CNKI 检索"})
         return priority
 
     # 磁法几乎是所有固体矿种的基础
@@ -810,13 +809,12 @@ def _compute_priority(methods: set) -> list:
     if any(m in methods_str for m in ["重力"]):
         priority.append({"rank": 2, "data": "全球布格重力异常 (WGM2012)", "method": "自动下载 + 裁剪"})
 
-    # 放射性
-    if any(m in methods_str for m in ["放射性"]):
-        priority.append({"rank": 3, "data": "ASTER 多光谱 (蚀变替代)", "method": "自动检索影像列表"})
+    # DEM 地形（自动下载出图，辅助构造/水系/蚀变地貌解译）
+    priority.append({"rank": 3, "data": "DEM 地形数据 (SRTM 30m)", "method": "自动下载 + 出图"})
 
     # 电法
     if any(m in methods_str for m in ["IP", "激电", "CSAMT", "MT", "电磁法", "大地电磁"]):
-        priority.append({"rank": 4, "data": "电法/电磁法数据", "method": "需自行采集 (网上无公开数据)"})
+        priority.append({"rank": 4, "data": "电法/电磁法数据", "method": "需野外施测 (无全国性公开数据)"})
 
     priority.append({"rank": 5, "data": "全国化探扫面数据 (图件)", "method": "NGAC 检索链接 + CNKI 文献检索"})
 

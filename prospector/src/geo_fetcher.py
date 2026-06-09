@@ -1,13 +1,132 @@
-"""地质资料获取器 — 地质图检索链接 / DEM / 学术文献"""
+"""地质资料获取器 — 地质图检索链接 / 在线地质图出图 / 学术文献"""
 
+import io
+import math
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote
 
 from .logger import get_logger
+from .http_client import get as http_get
+from .roi_parser import get_bbox_tuple
 from config import NGAC_SEARCH_PAGE, ONEGEOLOGY_URL
 
 logger = get_logger("geo")
+
+
+# ============================================================
+# 在线地质图出图（Macrostrat 全球地质底图，可公网访问 / CC-BY 4.0）
+# OneGeology 中国 1:100万 图层 WMS 在 cgs.gov.cn:8080，跨境多不可达，
+# 故改用 Macrostrat 栅格瓦片拼接 ROI 区域地质图。
+# ============================================================
+
+MACROSTRAT_TILE_URL = "https://tiles.macrostrat.org/carto/{z}/{x}/{y}.png"
+
+
+def _deg2num(lon: float, lat: float, z: int):
+    n = 2 ** z
+    x = (lon + 180.0) / 360.0 * n
+    lat_r = math.radians(lat)
+    y = (1.0 - math.asinh(math.tan(lat_r)) / math.pi) / 2.0 * n
+    return x, y
+
+
+def _num2deg(x: float, y: float, z: int):
+    n = 2 ** z
+    lon = x / n * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
+    return lon, lat
+
+
+def fetch_geology_map(roi: Dict[str, Any], output_dir: Path) -> Optional[Dict[str, Any]]:
+    """
+    用 Macrostrat 全球地质瓦片拼出 ROI 区域地质图并叠加 ROI 边界，出 PNG。
+
+    返回 {"map","source","note"}；任一步失败返回 None（降级为在线查看链接）。
+    """
+    try:
+        from PIL import Image
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        matplotlib.rcParams['font.sans-serif'] = [
+            'Hiragino Sans GB', 'Heiti TC', 'STHeiti', 'SimHei',
+            'Noto Sans CJK SC', 'DejaVu Sans',
+        ]
+        matplotlib.rcParams['axes.unicode_minus'] = False
+    except ImportError:
+        logger.warning("缺少 PIL/matplotlib，跳过地质图出图")
+        return None
+
+    try:
+        w, s, e, n_ = get_bbox_tuple(roi, use_expanded=True)
+
+        # 选 zoom：使覆盖瓦片数 ≤ 4×4，取尽量大的 zoom（更清晰）
+        z = 6
+        for ztry in range(11, 4, -1):
+            x0 = int(_deg2num(w, s, ztry)[0]); x1 = int(_deg2num(e, n_, ztry)[0])
+            y0 = int(_deg2num(w, n_, ztry)[1]); y1 = int(_deg2num(e, s, ztry)[1])
+            if (x1 - x0 + 1) <= 4 and (y1 - y0 + 1) <= 4:
+                z = ztry
+                break
+
+        xt0 = int(_deg2num(w, s, z)[0]); xt1 = int(_deg2num(e, n_, z)[0])
+        yt0 = int(_deg2num(w, n_, z)[1]); yt1 = int(_deg2num(e, s, z)[1])
+
+        ts = 512
+        mosaic = Image.new("RGBA", ((xt1 - xt0 + 1) * ts, (yt1 - yt0 + 1) * ts))
+        got = 0
+        for xt in range(xt0, xt1 + 1):
+            for yt in range(yt0, yt1 + 1):
+                url = MACROSTRAT_TILE_URL.format(z=z, x=xt, y=yt)
+                resp = http_get(url, timeout=20)
+                if resp.status_code == 200 and resp.content:
+                    tile = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+                    mosaic.paste(tile, ((xt - xt0) * ts, (yt - yt0) * ts))
+                    got += 1
+        if got == 0:
+            logger.warning("Macrostrat 瓦片未取到，跳过地质图出图")
+            return None
+
+        # 瓦片块经纬度范围（小范围近似，Mercator 失真可忽略）
+        lon_min, lat_max = _num2deg(xt0, yt0, z)
+        lon_max, lat_min = _num2deg(xt1 + 1, yt1 + 1, z)
+
+        fig, ax = plt.subplots(figsize=(9, 8), dpi=120)
+        ax.imshow(mosaic, extent=[lon_min, lon_max, lat_min, lat_max], origin="upper")
+        # 叠加 ROI 外接框 + 中心
+        b = roi.get("bbox", {})
+        if b:
+            ax.plot([b['west'], b['east'], b['east'], b['west'], b['west']],
+                    [b['south'], b['south'], b['north'], b['north'], b['south']],
+                    'r-', linewidth=1.6, label='ROI')
+        c = roi.get("center", {})
+        if c.get('lon') is not None:
+            ax.plot(c['lon'], c['lat'], marker='*', color='yellow', markersize=14,
+                    markeredgecolor='black', markeredgewidth=0.8, zorder=5)
+        ax.set_xlim(max(lon_min, w - (e - w)), min(lon_max, e + (e - w)))
+        ax.set_ylim(max(lat_min, s - (n_ - s)), min(lat_max, n_ + (n_ - s)))
+        ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
+        ax.set_title("ROI 区域地质图（Macrostrat 全球地质底图）")
+        if b:
+            ax.legend(loc='upper right', fontsize=9)
+
+        out_dir = Path(output_dir) / "01_地质资料"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        png = out_dir / "geology_map.png"
+        fig.tight_layout()
+        fig.savefig(png, bbox_inches="tight", dpi=120)
+        plt.close(fig)
+
+        logger.info("地质图已出图: %s (zoom=%d, %d tiles)", png, z, got)
+        return {
+            "map": str(png),
+            "source": "Macrostrat — Global Geologic Map (CC-BY 4.0)",
+            "note": "基于 Macrostrat 全球地质底图按 ROI 范围拼接；点查询可溯源岩性/年代",
+        }
+    except Exception as ex:
+        logger.warning("地质图出图失败: %s", ex)
+        return None
 
 
 def _get_1m_map_sheet(roi: Dict[str, Any]) -> str:
@@ -202,6 +321,7 @@ def fetch_all_geological(
         "ngac_geochem": generate_ngac_geochem_links(roi, mineral),
         "cnki": generate_cnki_links(roi, mineral, mineral_info, location),
         "onegeology": generate_onegeology_link(roi),
+        "geology_map": fetch_geology_map(roi, output_dir),
         "map_sheet": _get_1m_map_sheet(roi),
     }
 

@@ -25,7 +25,6 @@ from src.tectonic_units import analyze_roi_location, TECTONIC_UNITS, PETROLEUM_B
 from src.geo_fetcher import fetch_all_geological
 from src.geophy_fetcher import fetch_all_geophysical
 from src.geochem_fetcher import fetch_all_geochemical
-from src.rs_fetcher import fetch_all_remote_sensing
 from src.live_fetcher import fetch_all_live_data
 from src.report_generator import generate_report, save_json_summary
 from src.exceptions import NetworkError, ROIError, FetchError
@@ -101,13 +100,12 @@ def _cleanup_upload(upload_path: str) -> None:
         pass
 
 
-def _save_viz_data(output_dir: Path, roi, geochemical, live_data, remote_sensing) -> None:
+def _save_viz_data(output_dir: Path, roi, geochemical, live_data) -> None:
     """保存可视化所需的结构化数据"""
     output_dir = Path(output_dir)
     geochem = geochemical or {}
     bgs = geochem.get('backgrounds', {})
     ld = live_data or {}
-    rs = remote_sensing or {}
 
     viz = {
         'bbox': roi.get('bbox'),
@@ -115,7 +113,6 @@ def _save_viz_data(output_dir: Path, roi, geochemical, live_data, remote_sensing
         'national_ref': bgs.get('national_reference'),
         'source_unit': bgs.get('source_unit'),
         'papers': ld.get('papers', []),
-        'sentinel2': rs.get('sentinel2', []),
     }
     try:
         with open(output_dir / 'viz_data.json', 'w', encoding='utf-8') as f:
@@ -156,10 +153,6 @@ def run_pipeline_thread(task_id: str, roi_path: str, mineral: str,
         _save_task_meta(task)
         geochemical = fetch_all_geochemical(roi, task['output_dir'], mineral, mineral_info, location)
 
-        task['step'] = '收集遥感资料'
-        _save_task_meta(task)
-        remote_sensing = fetch_all_remote_sensing(roi, task['output_dir'], mineral_info)
-
         task['step'] = '实时查询学术论文'
         _save_task_meta(task)
         mag_file = geophysical.get('magnetic', {}).get('file') if geophysical.get('magnetic') else None
@@ -175,12 +168,12 @@ def run_pipeline_thread(task_id: str, roi_path: str, mineral: str,
         _save_task_meta(task)
         report_path = generate_report(
             roi, mineral, mineral_info, location,
-            geological, geophysical, geochemical, remote_sensing, live_data,
+            geological, geophysical, geochemical, live_data,
             task['output_dir'],
         )
         json_path = save_json_summary(
             roi, mineral, mineral_info,
-            geological, geophysical, geochemical, remote_sensing,
+            geological, geophysical, geochemical,
             task['output_dir'],
         )
 
@@ -200,7 +193,6 @@ def run_pipeline_thread(task_id: str, roi_path: str, mineral: str,
             ),
             'n_geochem_links': len(geochemical.get('ngac_links', [])),
             'n_cnki_links': len(geological.get('cnki', [])),
-            'n_sentinel2': len(remote_sensing.get('sentinel2', [])),
             'magnetic_downloaded': geophysical.get('magnetic') is not None,
             'gravity_downloaded': geophysical.get('gravity') is not None,
         }
@@ -210,7 +202,7 @@ def run_pipeline_thread(task_id: str, roi_path: str, mineral: str,
         _save_task_meta(task)
 
         # 保存可视化数据供 task-detail API 使用
-        _save_viz_data(task['output_dir'], roi, geochemical, live_data, remote_sensing)
+        _save_viz_data(task['output_dir'], roi, geochemical, live_data)
 
         _cleanup_upload(roi_path)
         logger.info("任务 %s 完成", task_id)
@@ -608,7 +600,6 @@ def api_task_detail(task_id):
         'national_ref': None,
         'source_unit': None,
         'papers': [],
-        'sentinel2': [],
     }
     return jsonify(result)
 

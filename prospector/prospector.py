@@ -25,7 +25,6 @@ from src.tectonic_units import analyze_roi_location
 from src.geo_fetcher import fetch_all_geological
 from src.geophy_fetcher import fetch_all_geophysical, clip_external_emag2
 from src.geochem_fetcher import fetch_all_geochemical
-from src.rs_fetcher import fetch_all_remote_sensing
 from src.report_generator import generate_report, save_json_summary
 
 
@@ -155,7 +154,7 @@ def run_pipeline(
 
     # Step 1: 解析 ROI
     print("\n" + "=" * 60)
-    print("  Step 1/7: 解析 ROI")
+    print("  Step 1/6: 解析 ROI")
     print("=" * 60)
     roi = parse_roi(roi_path)
     roi = expand_bbox(roi, buffer_km)
@@ -166,7 +165,7 @@ def run_pipeline(
 
     # Step 2: 定位构造单元
     print("\n" + "=" * 60)
-    print("  Step 2/7: 定位构造单元")
+    print("  Step 2/6: 定位构造单元")
     print("=" * 60)
     location = analyze_roi_location(roi)
     tu = location.get('center_tectonic')
@@ -180,7 +179,7 @@ def run_pipeline(
 
     # Step 3: 知识库
     print("\n" + "=" * 60)
-    print("  Step 3/7: 查询矿种知识库")
+    print("  Step 3/6: 查询矿种知识库")
     print("=" * 60)
     mineral_info = get_mineral_info(mineral)
     mts = mineral_info.get('metallogenic_types', [])
@@ -189,13 +188,13 @@ def run_pipeline(
 
     # Step 4: 地质资料
     print("\n" + "=" * 60)
-    print("  Step 4/7: 收集地质资料")
+    print("  Step 4/6: 收集地质资料")
     print("=" * 60)
     geological = fetch_all_geological(roi, out_dir, mineral, mineral_info, location)
 
     # Step 5: 地球物理
     print("\n" + "=" * 60)
-    print("  Step 5/7: 收集地球物理资料")
+    print("  Step 5/6: 收集地球物理资料")
     print("=" * 60)
     geophysical = fetch_all_geophysical(roi, out_dir, mineral_info, auto_download)
 
@@ -219,15 +218,9 @@ def run_pipeline(
 
     # Step 6: 地球化学
     print("\n" + "=" * 60)
-    print("  Step 6/7: 收集地球化学资料")
+    print("  Step 6/6: 收集地球化学资料")
     print("=" * 60)
     geochemical = fetch_all_geochemical(roi, out_dir, mineral, mineral_info, location)
-
-    # Step 7: 遥感
-    print("\n" + "=" * 60)
-    print("  Step 7/7: 收集遥感资料")
-    print("=" * 60)
-    remote_sensing = fetch_all_remote_sensing(roi, out_dir, mineral_info)
 
     # 生成报告
     print("\n" + "=" * 60)
@@ -235,13 +228,13 @@ def run_pipeline(
     print("=" * 60)
     report_path = generate_report(
         roi, mineral, mineral_info, location,
-        geological, geophysical, geochemical, remote_sensing,
+        geological, geophysical, geochemical,
         live_data=None,
         output_dir=out_dir,
     )
     json_path = save_json_summary(
         roi, mineral, mineral_info,
-        geological, geophysical, geochemical, remote_sensing,
+        geological, geophysical, geochemical,
         out_dir,
     )
 

@@ -127,24 +127,3 @@ function renderPaperCards(papers) {
   }).join('');
 }
 
-function renderSentinelGrid(sentinel2, taskId) {
-  const container = Utils.$('#sentinelGridContainer');
-  if (!container || !sentinel2 || sentinel2.length === 0) return;
-  Utils.show('#sentinelGridSection');
-
-  container.innerHTML = `<div class="d-flex flex-wrap gap-2">${
-    sentinel2.slice(0, 8).map(item => {
-      const thumb = item.thumbnail || '';
-      const date = item.date ? item.date.slice(0, 10) : 'N/A';
-      const cloud = item.cloud_cover !== undefined ? `${item.cloud_cover}%` : 'N/A';
-      return thumb ? `
-        <div class="text-center" style="width: 140px;">
-          <img src="${thumb}" alt="Sentinel-2 ${date}"
-               style="width: 140px; height: 140px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border);"
-               onerror="this.parentElement.style.display='none';">
-          <div class="small text-muted mt-1">${date}</div>
-          <div class="small text-muted">云量: ${cloud}</div>
-        </div>` : '';
-    }).join('')
-  }</div>`;
-}

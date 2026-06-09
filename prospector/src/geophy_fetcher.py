@@ -23,6 +23,7 @@ from config import (
     WGM2012_BOUGUER_URL,
     ICGEM_CALC_URL,
     OPENTOPOGRAPHY_URL,
+    OPENTOPOGRAPHY_API_KEY,
     EE_URL,
 )
 
@@ -276,6 +277,73 @@ def generate_dem_download_info(roi: Dict[str, Any]) -> Dict[str, Any]:
             "note": "地理空间数据云 (gscloud.cn) 国内下载速度最快，注册即可",
         }
     }
+
+
+def download_dem(roi: Dict[str, Any], output_dir: Path) -> Dict[str, Any]:
+    """
+    自动下载 ROI 范围 SRTM DEM（OpenTopography API）并出地形图。
+
+    有 OPENTOPOGRAPHY_API_KEY 才下载+出图；否则降级为下载链接信息。
+
+    Returns:
+        downloaded=True: {source, resolution, file, map, stats, downloaded, links}
+        downloaded=False: {source, downloaded, links}
+    """
+    bbox = get_bbox_tuple(roi, use_expanded=True)
+    info = generate_dem_download_info(roi)["srtm_30m"]
+    links = [
+        {"label": "OpenTopography SRTM GL3", "url": info["opentopography_url"], "note": info["opentopography_note"]},
+        {"label": "地理空间数据云 — DEM", "url": info["gscloud_url"], "note": info["note"]},
+    ]
+
+    if not OPENTOPOGRAPHY_API_KEY:
+        logger.info("未配置 OPENTOPOGRAPHY_API_KEY，DEM 降级为下载链接")
+        return {"source": "SRTM GL3 (30m)", "downloaded": False, "links": links}
+
+    try:
+        dem_dir = Path(output_dir) / "dem"
+        dem_dir.mkdir(parents=True, exist_ok=True)
+        tif = dem_dir / "srtm_dem.tif"
+        url = (
+            f"{OPENTOPOGRAPHY_URL}?demtype=SRTMGL3"
+            f"&west={bbox[0]}&south={bbox[1]}&east={bbox[2]}&north={bbox[3]}"
+            f"&outputFormat=GTiff&API_Key={OPENTOPOGRAPHY_API_KEY}"
+        )
+        logger.info("下载 SRTM DEM (OpenTopography)...")
+        download_file(url, tif)
+
+        # 高程统计
+        stats = None
+        with rasterio.open(tif) as src:
+            arr = src.read(1).astype(np.float64)
+            if src.nodata is not None:
+                arr = np.ma.masked_equal(arr, src.nodata)
+            stats = {
+                "min": round(float(np.ma.min(arr)), 1),
+                "max": round(float(np.ma.max(arr)), 1),
+                "mean": round(float(np.ma.mean(arr)), 1),
+            }
+
+        # 出图（复用通用栅格绘图，地形色阶/米）
+        png = dem_dir / "dem_map.png"
+        map_file = _generate_magnetic_map(
+            tif, png, roi,
+            title="SRTM 地形高程分布 (m)",
+            cmap="terrain", unit="m", symmetric=False, value_name="Elevation",
+        )
+        logger.info("DEM 已下载并出图: %s", tif)
+        return {
+            "source": "SRTM GL3 (30m, OpenTopography)",
+            "resolution": "~30 m",
+            "file": str(tif),
+            "map": map_file,
+            "stats": stats,
+            "downloaded": True,
+            "links": links,
+        }
+    except Exception as e:
+        logger.warning("DEM 下载/出图失败，降级为链接: %s", e)
+        return {"source": "SRTM GL3 (30m)", "downloaded": False, "links": links}
 
 
 # ============================================================
@@ -618,8 +686,8 @@ def fetch_all_geophysical(
             "note": "GFZ Potsdam，可在线计算各类重力异常并下载"
         })
 
-    # DEM
-    results["dem"] = generate_dem_download_info(roi)
+    # DEM（有 OpenTopography key 则自动下载+出图，否则降级为链接）
+    results["dem"] = download_dem(roi, geo_dir)
 
     logger.info("─" * 50)
     return results

@@ -3,16 +3,15 @@
  */
 
 const STEP_MAP = {
-  '解析 ROI': 8, '定位构造单元': 15, '查询矿种知识库': 22,
-  '收集地质资料': 35, '收集地球物理资料': 52,
-  '收集地球化学资料': 68, '收集遥感资料': 78,
-  '实时查询学术论文': 88, '生成报告': 95, '完成': 100,
+  '解析 ROI': 8, '定位构造单元': 16, '查询矿种知识库': 24,
+  '收集地质资料': 40, '收集地球物理资料': 58,
+  '收集地球化学资料': 74, '实时查询学术论文': 88, '生成报告': 95, '完成': 100,
 };
 
 const STEP_LABELS = [
   '解析 ROI', '定位构造单元', '查询矿种知识库',
   '收集地质资料', '收集地球物理资料', '收集地球化学资料',
-  '收集遥感资料', '实时查询学术论文', '生成报告',
+  '实时查询学术论文', '生成报告',
 ];
 
 async function submitTask() {
@@ -152,10 +151,6 @@ async function loadFullResult(taskId) {
       renderPaperCards(data.papers);
     }
 
-    // Sentinel-2 缩略图
-    if (data.sentinel2) {
-      renderSentinelGrid(data.sentinel2, taskId);
-    }
   } catch (e) {
     console.warn('加载详细结果失败:', e);
   }

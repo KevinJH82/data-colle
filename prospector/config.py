@@ -1,5 +1,6 @@
 """Prospector 配置集中管理"""
 
+import os
 from pathlib import Path
 
 # ── 目录 ──
@@ -44,6 +45,8 @@ WGM2012_BOUGUER_URL = (
 )
 ICGEM_CALC_URL = "http://icgem.gfz-potsdam.de/calcgrid"
 OPENTOPOGRAPHY_URL = "https://portal.opentopography.org/API/globaldem"
+# OpenTopography API key（免费注册获取）；为空则 DEM 降级为下载链接，不自动下载出图
+OPENTOPOGRAPHY_API_KEY = os.getenv("OPENTOPOGRAPHY_API_KEY", "")
 EE_URL = "https://earthexplorer.usgs.gov/"
 
 # 地球化学
@@ -68,6 +71,11 @@ S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 
 # 翻译
 MYMEMORY_URL = "https://api.mymemory.translated.net/get"
+
+# ── 论文 LLM 提炼（Anthropic Claude）──
+# 为空则跳过提炼，报告保留论文列表（优雅降级）
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+PAPER_SYNTHESIS_MODEL = os.getenv("PAPER_SYNTHESIS_MODEL", "claude-sonnet-4-6")
 
 # ── 清理 ──
 TASK_MAX_AGE_DAYS = 30        # 超过此天数的任务输出目录打印警告

@@ -180,11 +180,11 @@ def _geophysical_coverage(mineral_info: Dict[str, Any], geophysical: Dict[str, A
     for m in sorted(methods):
         # 注意：电法/电磁/激电类需先判定，避免"电磁法"被后面的 '磁' 误匹配为航磁
         if any(k in m for k in ['IP', '激电', 'CSAMT', 'MT', '电磁', '电法', '大地电磁']):
-            status = "❌ 需野外自行采集（无公开数据）"
+            status = "⚠️ 无全国性公开数据集，常规需野外施测；部分地区历史成果可在地质资料馆/文献查取"
         elif '放射性' in m or 'γ' in m or '能谱' in m or '氡' in m:
-            status = "❌ 需航空/地面伽马能谱测量（无公开数据）"
+            status = "⚠️ 无全国性公开数据集，需航空/地面伽马能谱测量；部分图幅成果见地质资料馆/文献"
         elif '地震' in m:
-            status = "❌ 需与矿权/油田方合作或购买（无公开数据）"
+            status = "⚠️ 多为矿权/油田方专有数据，公开渠道少，需合作获取或查文献"
         elif '磁' in m or '航磁' in m:
             status = "✅ 本次已获取（EMAG2 航磁，见下方分布图）" if has_mag else "🔗 链接模式（未自动下载）"
         elif '重力' in m:
@@ -231,20 +231,31 @@ def _render_spine(
 
     best_model = ranked[0][0]
 
+    # 本区构造要素组（"吻合度"判断的可追溯依据：来自构造单元 name+features 的关键词分组）
+    tu_ctx = f"{tu.get('name', '')} {tu.get('features', '')}" if tu else ""
+    ctx_tokens = _setting_tokens(tu_ctx)
+    ctx_str = '、'.join(sorted(ctx_tokens)) if ctx_tokens else '（构造单元描述未识别出标准构造要素）'
+
     md += (f"下列 {len(ranked)} 种 **{mineral}** 成矿模型按与本区构造背景的吻合度排序，"
-           f"**第一项为最契合本区的模型**；后续化探、物探、结论各章节均围绕它展开：\n\n")
+           f"**第一项为最契合本区的模型**；后续化探、物探、结论各章节均围绕它展开。\n\n")
+    md += (f"> **吻合度判定依据**：将本区构造要素组与各模型的构造背景要素组比对，有重叠即判为契合。"
+           f"本区构造要素组 = ｛{ctx_str}｝。\n\n")
 
     for idx, (mt, score, matched) in enumerate(ranked):
+        mt_tokens = _setting_tokens(mt.get('tectonic_setting', ''))
+        mt_str = '、'.join(sorted(mt_tokens)) if mt_tokens else '（未识别出标准构造要素）'
         if idx == 0 and score > 0:
             tag = "✅ 本区最契合模型"
         elif idx == 0:
-            tag = "参考模型（与本区构造无直接关键词匹配，需论证）"
+            tag = "参考模型（与本区构造要素组无重叠，需结合实际地质背景论证）"
         else:
             tag = "候选模型"
         if matched:
-            fit = f"匹配（与本区共有构造要素：{', '.join(matched)}）"
+            fit = (f"契合 — 该模型构造要素组 ｛{mt_str}｝ 与本区 ｛{ctx_str}｝ "
+                   f"共有：{'、'.join(sorted(matched))}")
         else:
-            fit = "与本区构造要素无直接关键词匹配，需结合实际地质背景论证"
+            fit = (f"未自动判定契合 — 该模型构造要素组 ｛{mt_str}｝ 与本区 ｛{ctx_str}｝ "
+                   f"无重叠；这是基于关键词分组的初判，需结合实际地质背景论证")
 
         md += f"""### {idx + 1}. {mt['name']} — {tag}
 
@@ -292,7 +303,6 @@ def generate_report(
     geological: Dict[str, Any],
     geophysical: Dict[str, Any],
     geochemical: Dict[str, Any],
-    remote_sensing: Dict[str, Any],
     live_data: Optional[Dict] = None,
     output_dir: Optional[Path] = None,
 ) -> str:
@@ -419,7 +429,7 @@ def generate_report(
             report += (f"- **前缘/晕(pathfinder)元素**：{', '.join(path)} —— 常构成矿体的前缘晕/尾晕，"
                        f"用于追踪隐伏矿体、判断剥蚀程度。\n")
         report += (f"- 圈靶时应优先关注上述元素 **同时高于中异常(2×)阈值且空间套合** 的地段，"
-                   f"并按 element_association 描述的分带规律（前缘晕→矿体→尾晕）判断矿体产出部位。\n")
+                   f"并按上述**指示元素组合**描述的分带规律（前缘晕→矿体→尾晕）判断矿体产出部位。\n")
         missing = [e for e in key_elems if e not in thresholds]
         if missing:
             report += (f"- ⚠️ 关键指标 {', '.join(missing)} 不在水系沉积物 39 元素背景体系内，"
@@ -542,6 +552,15 @@ def generate_report(
                     report += f"![{display}分布图]({map_rel})\n\n"
                 except (ValueError, TypeError):
                     report += f"- 分布图: `{func_data['map']}`\n\n"
+            # 找矿解读：重力扰动给模型导向提示；大地水准面如实说明意义有限
+            if func_name == "gravity_disturbance":
+                if best_model:
+                    report += (f"> **如何用于找 {mineral}**：重力扰动反映地下密度差异，"
+                               f"结合「{best_model['name']}」模型可识别隐伏岩体、基底起伏与接触带等控矿要素，"
+                               f"与磁法、化探异常联合定位靶区。\n\n")
+            else:  # geoid_height 大地水准面高
+                report += ("> **说明**：大地水准面高反映区域深部质量分布与大地构造背景，"
+                           "**对直接圈定矿体意义有限**，仅作区域构造格架参考，不单独用于找矿。\n\n")
     elif geophysical.get('icgem_link'):
         report += f"### 在线重力场精细计算\n\n[ICGEM 在线计算]({geophysical['icgem_link']}) — 可自定义重力场模型和计算参数\n\n"
     else:
@@ -549,17 +568,51 @@ def generate_report(
 
     # --- DEM ---
     dem = geophysical.get('dem', {})
-    report += "### DEM 地形数据\n\n"
-    for key, info in dem.items():
-        src = info.get('source', key)
-        gs = info.get('gscloud_url', '')
-        report += f"- **{src}**: [地理空间数据云]({gs})（国内高速）\n"
+    if dem.get('downloaded'):
+        report += "### DEM 地形数据 ✅ 已获取\n\n"
+        report += f"| 项目 | 内容 |\n|------|------|\n"
+        report += f"| **来源** | {dem.get('source', 'SRTM')} |\n"
+        report += f"| **分辨率** | {dem.get('resolution', '~30 m')} |\n"
+        report += f"| **文件** | `{dem.get('file', '')}` |\n"
+        st = dem.get('stats') or {}
+        if st:
+            report += (f"| **高程范围** | {st.get('min')} ~ {st.get('max')} m"
+                       f"（均值 {st.get('mean')} m） |\n")
+        report += "\n"
+        if dem.get('map'):
+            try:
+                map_rel = Path(dem['map']).relative_to(output_dir).as_posix()
+                report += f"![DEM 地形高程分布图]({map_rel})\n\n"
+                report += "*图：ROI 范围 SRTM 地形高程分布（m），星标为中心点，黑线为 ROI 边界*\n\n"
+            except (ValueError, TypeError):
+                pass
+        report += (f"> **如何用于找 {mineral}**：地形/水系受构造与岩性控制，"
+                   f"线性谷地、环形构造、陡坎常对应断裂/岩体边界；"
+                   f"风化壳/蚀变带在地貌上亦有响应，可与物探、化探异常套合辅助圈靶。\n\n")
+    else:
+        report += "### DEM 地形数据 🔗 链接模式\n\n"
+        report += "_未配置 OpenTopography API key，未自动下载；可经以下渠道获取 SRTM 30m DEM：_\n\n"
+        for link in dem.get('links', []):
+            report += f"- [{link['label']}]({link['url']}) — {link.get('note', '')}\n"
+        report += "\n"
 
     # --- 实时查询论文 ---
     report += f"\n---\n\n## 五、区域已发表研究论文\n\n"
     papers = live_data.get("papers", []) if live_data else []
     if papers:
         _rpt_log.info("开始生成论文部分: %d 篇论文", len(papers))
+
+        # 论文 LLM 提炼（围绕本 ROI 找矿；未配置 key 则跳过，保留下方列表）
+        try:
+            from .paper_synthesis import synthesize_papers
+            _synth = synthesize_papers(papers, mineral, location, roi)
+        except Exception as _e:
+            _synth = None
+            _rpt_log.warning("论文提炼调用异常: %s", _e)
+        if _synth:
+            report += f"### 📌 论文要点提炼（围绕本 ROI 找矿）\n\n{_synth}\n\n---\n\n"
+
+        report += "### 论文清单\n\n"
         report += f"> 自动检索 OpenAlex + Semantic Scholar，针对 **{tu_name}** + **{mineral}**。\n"
         report += "> 摘要来自数据库，**全文受版权限制无法内嵌，请点击下方链接到出版方/DOI 查看**。\n\n"
         for i, p in enumerate(papers[:15], 1):
@@ -618,7 +671,18 @@ def generate_report(
     # ============================================================
     report += "\n---\n\n## 六、地质资料在线检索\n\n"
 
-    report += f"""以下链接已自动带入你的 ROI 坐标和图幅号：
+    # 区域地质图（Macrostrat 在线出图，失败则降级为下方 OneGeology 在线查看链接）
+    gm = geological.get('geology_map')
+    if gm and gm.get('map'):
+        try:
+            gm_rel = Path(gm['map']).relative_to(output_dir).as_posix()
+            report += "### 区域地质图（在线获取）✅\n\n"
+            report += f"![ROI 区域地质图]({gm_rel})\n\n"
+            report += f"*图：{gm.get('source', '')}；{gm.get('note', '')}（星标为中心点，红框为 ROI）*\n\n"
+        except (ValueError, TypeError):
+            pass
+
+    report += f"""以下检索链接已自动带入你的 ROI 坐标和图幅号：
 
 ### NGAC 全国地质资料馆
 
@@ -636,43 +700,17 @@ def generate_report(
 
 {_format_links(geological.get('cnki', []))}
 
-### OneGeology 全球地质图
+### OneGeology 全球地质图（在线查看）
 
-[在 OneGeology 查看 ROI]({geological.get('onegeology', '')})
+[在 OneGeology 查看 ROI]({geological.get('onegeology', '')}) — 可在线叠加各国地质图层
 
----
-
-## 七、遥感数据
+> ⚠️ **数据获取边界（如实说明）**：NGAC 的 1:5万 地质图、化探原始点位数据**未开放在线下载、无公开 API**，上方为检索入口与建议检索词，原始数据仍需经资料馆线下渠道；CNKI/万方文献需登录查看全文。上方"区域地质图"已用 Macrostrat 全球地质底图在线出图；OneGeology 的中国 1:100万 图层在 cgs.gov.cn（跨境访问受限），故以在线查看链接形式提供。
 
 """
-
-    s2_items = remote_sensing.get('sentinel2', [])
-    if s2_items:
-        report += f"**Sentinel-2 影像**：检索到 {len(s2_items)} 景（云量<10%）\n\n"
-    else:
-        report += "**Sentinel-2**: 需手动检索（见下方链接）\n\n"
-
-    report += f"""### 影像检索
-
-{_format_links(remote_sensing.get('earth_explorer_links', []))}
-
-{_format_links(remote_sensing.get('gscloud_links', []))}
-
-### ASTER 蚀变矿物填图参考
-
-```{remote_sensing.get('aster_info', '')[:500]}...
-```
-
-"""
-
-    if best_model and not is_oil and best_model.get('alteration'):
-        report += (f"> **针对 {mineral}**：依「{best_model['name']}」模型，应重点提取以下蚀变矿物组合——"
-                   f"{best_model['alteration']}；用 ASTER/Sentinel-2 做蚀变异常填图，"
-                   f"圈出的蚀变带与化探元素套合、物探异常叠合处即为有利靶区。\n\n")
 
     report += f"""---
 
-## 八、数据收集优先级（基于 {mineral} × {tu_name if tu else '通用'} 特征）
+## 七、数据收集优先级（基于 {mineral} × {tu_name if tu else '通用'} 特征）
 
 """
 
@@ -680,9 +718,9 @@ def generate_report(
         report += f"{item['rank']}. **{item['data']}** → {item['method']}\n"
 
     # ============================================================
-    # 九、综合结论与靶区建议（模型驱动）
+    # 八、综合结论与靶区建议（模型驱动）
     # ============================================================
-    report += "\n---\n\n## 九、综合结论与靶区建议\n\n"
+    report += "\n---\n\n## 八、综合结论与靶区建议\n\n"
 
     loc_str = f"**{tu_name}**" if tu_name else "本区"
     if best_model and not is_oil:
@@ -715,10 +753,11 @@ def generate_report(
         report += "1. **叠合分析**：在 QGIS 中将物探、化探与地质图叠合，圈定有利部位。\n"
     report += (f"2. **化探异常验证**：对照第三节 {source_unit}背景值，在 NGAC 化探图中圈出 "
                f"{mineral} 指示元素高于中异常(2×)阈值的套合区。\n")
-    report += "3. **物探补充**：对照第四节覆盖度表中标 ❌ 的方法（如电法/放射性/地震），按需野外补测。\n"
+    report += "3. **物探补充**：对照第四节覆盖度表中标 ⚠️ 的方法（如电法/放射性/地震），按需野外施测或查地质资料馆历史成果。\n"
     report += (f"4. **文献深挖**：精读第五/六节 {tu_name + ' ' if tu_name else ''}{mineral} 相关前人研究，"
                f"关注已报道矿化点与异常查证结论。\n")
-    report += "5. **大比例尺数据**：通过 NGAC 线下渠道获取 1:5万 地质图与化探原始点数据。\n"
+    report += ("5. **大比例尺数据**：1:5万 地质图与化探原始点位数据未在线开放（NGAC 无公开 API），"
+               "需经全国地质资料馆线下渠道申请获取；线上仅能拿到上述区域地质图、公开物探/DEM 与文献。\n")
 
     report += f"""
 ---
@@ -742,7 +781,6 @@ def save_json_summary(
     geological: Dict[str, Any],
     geophysical: Dict[str, Any],
     geochemical: Dict[str, Any],
-    remote_sensing: Dict[str, Any],
     output_dir: Path,
     location: Optional[Dict] = None,
 ) -> str:
@@ -793,9 +831,6 @@ def save_json_summary(
             "ngac_mineral": len(geological.get('ngac_mineral', [])),
             "ngac_geochem": len(geological.get('ngac_geochem', [])),
             "cnki": len(geological.get('cnki', [])),
-        },
-        "remote_sensing": {
-            "sentinel2_images": len(remote_sensing.get('sentinel2', [])),
         },
     }
 

@@ -16,7 +16,6 @@ function showResult(data) {
     ['地质链接', `${r.n_geological_links || 0} 条`],
     ['化探链接', `${r.n_geochem_links || 0} 条`],
     ['学术文献', `${r.n_cnki_links || 0} 条`],
-    ['Sentinel-2 影像', `${r.n_sentinel2 || 0} 景`],
     ['磁法数据', r.magnetic_downloaded ? '✅ 已下载' : '🔗 链接已生成'],
     ['重力数据', r.gravity_downloaded ? '✅ 已下载' : '🔗 链接已生成'],
   ];
