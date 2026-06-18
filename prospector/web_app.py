@@ -64,6 +64,15 @@ def _save_task_meta(task: dict) -> None:
         meta = {k: v for k, v in task.items()}
         if isinstance(meta.get('output_dir'), Path):
             meta['output_dir'] = str(meta['output_dir'])
+        # 决策轨迹血缘三键（容错，不影响产物）：task 自带 trace_id 优先 → 自生成
+        try:
+            import sys as _sys
+            if "/opt/deepexplor-services" not in _sys.path:
+                _sys.path.insert(0, "/opt/deepexplor-services")
+            from commons.trace import stamp_metadata
+            stamp_metadata(meta, explicit_trace_id=task.get('trace_id'))
+        except Exception:
+            pass
         with open(_task_meta_path(task['output_dir']), 'w', encoding='utf-8') as f:
             json.dump(meta, f, ensure_ascii=False, indent=2, default=str)
     except Exception as e:
