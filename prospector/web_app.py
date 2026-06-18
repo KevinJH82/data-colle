@@ -37,6 +37,15 @@ from config import (
 )
 
 app = Flask(__name__)
+# ── 内部鉴权:拒绝绕过 BFF 的直连(PORTAL_INTERNAL_KEY 配置后生效) ──
+try:
+    import sys as _ia_sys
+    if '/opt/deepexplor-services' not in _ia_sys.path:
+        _ia_sys.path.insert(0, '/opt/deepexplor-services')
+    from commons.internal_auth import init_internal_auth as _init_internal_auth
+    _init_internal_auth(app)
+except Exception as _ia_e:
+    print(f'[internal_auth] 跳过接入: {_ia_e}')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB，支持全球数据文件上传
 
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -70,7 +79,7 @@ def _save_task_meta(task: dict) -> None:
             if "/opt/deepexplor-services" not in _sys.path:
                 _sys.path.insert(0, "/opt/deepexplor-services")
             from commons.trace import stamp_metadata
-            stamp_metadata(meta, explicit_trace_id=task.get('trace_id'))
+            stamp_metadata(meta, explicit_trace_id=task.get('trace_id'), tenant_id=task.get('tenant_id'))
         except Exception:
             pass
         with open(_task_meta_path(task['output_dir']), 'w', encoding='utf-8') as f:
@@ -259,6 +268,7 @@ def api_upload():
 
     tasks[task_id] = {
         'id': task_id,
+        'tenant_id': request.headers.get('X-Tenant-Id'),   # P2 隔离:BFF 注入
         'status': 'pending',
         'step': '等待中',
         'output_dir': task_output_dir,

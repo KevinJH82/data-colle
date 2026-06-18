@@ -3,6 +3,15 @@
 import os
 from pathlib import Path
 
+# 从同级 .env 读取密钥(无 python-dotenv 依赖,导入即注入 os.environ,持久且重启不丢)
+_envf = Path(__file__).parent / ".env"
+if _envf.exists():
+    for _line in _envf.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 # ── 目录 ──
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -77,7 +86,7 @@ MYMEMORY_URL = "https://api.mymemory.translated.net/get"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
 # deepseek-chat 别名 2026-07-24 后弃用，对应 deepseek-v4-flash；可经环境变量切换
-PAPER_SYNTHESIS_MODEL = os.getenv("PAPER_SYNTHESIS_MODEL", "deepseek-chat")
+PAPER_SYNTHESIS_MODEL = os.getenv("PAPER_SYNTHESIS_MODEL", "deepseek-v4-flash")
 
 # ── 清理 ──
 TASK_MAX_AGE_DAYS = 30        # 超过此天数的任务输出目录打印警告
