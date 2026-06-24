@@ -28,6 +28,7 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 # ── 网络请求 ──
 DEFAULT_TIMEOUT = 30          # 秒，普通 API 调用
 LONG_TIMEOUT = 120            # 秒，大文件下载
+GEOLOGY_MAP_TIMEOUT = int(os.getenv("GEOLOGY_MAP_TIMEOUT", "90"))  # 秒，地质瓦片拼图总耗时上限
 MAX_RETRIES = 3               # 最大重试次数
 RETRY_BACKOFF = 2             # 指数退避基数（秒）
 RETRY_STATUS_CODES = {429, 502, 503, 504}

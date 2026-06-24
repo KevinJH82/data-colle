@@ -58,6 +58,20 @@ logger = get_logger("web")
 # 任务状态存储（内存 + 磁盘持久化）
 tasks: dict = {}
 
+STEP_PROGRESS = {
+    '等待中': 0,
+    '解析 ROI': 8,
+    '定位构造单元': 18,
+    '查询矿种知识库': 28,
+    '收集地质资料': 40,
+    '收集地球物理资料': 58,
+    '收集地球化学资料': 72,
+    '实时查询学术论文': 84,
+    '生成报告': 94,
+    '完成': 100,
+    '失败': 100,
+}
+
 
 # 后台线程池（限制最大并发数）
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
@@ -257,6 +271,7 @@ def api_upload():
     mineral = request.form.get('mineral', '铜')
     buffer_km = float(request.form.get('buffer', 20))
     auto_download = request.form.get('auto_download', 'false') == 'true'
+    trace_id = request.form.get('trace_id') or request.headers.get('X-Trace-Id') or ''
 
     task_id = uuid.uuid4().hex[:12]
     project_name = f"{Path(file.filename).stem}_{mineral}_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -274,6 +289,7 @@ def api_upload():
         'output_dir': task_output_dir,
         'output_name': project_name,
         'mineral': mineral,
+        'trace_id': trace_id or None,
         'created_at': datetime.now().isoformat(),
     }
     _save_task_meta(tasks[task_id])
@@ -294,11 +310,14 @@ def api_status(task_id):
     if not task:
         return jsonify({'error': '任务不存在'}), 404
 
+    step = task.get('step', '')
     resp = {
         'task_id': task_id,
         'status': task['status'],
-        'step': task.get('step', ''),
+        'step': step,
+        'progress': int(task.get('progress') or STEP_PROGRESS.get(step, 0)),
         'output_name': task.get('output_name', ''),
+        'trace_id': task.get('trace_id'),
     }
 
     if task['status'] == 'completed':
@@ -319,7 +338,9 @@ def api_tasks():
             'mineral': task.get('mineral', ''),
             'status': task.get('status', ''),
             'step': task.get('step', ''),
+            'progress': int(task.get('progress') or STEP_PROGRESS.get(task.get('step', ''), 0)),
             'output_name': task.get('output_name', ''),
+            'trace_id': task.get('trace_id'),
             'created_at': task.get('created_at', ''),
         })
     result.sort(key=lambda t: t.get('created_at', ''), reverse=True)

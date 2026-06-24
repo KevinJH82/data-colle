@@ -2,6 +2,8 @@
 
 import io
 import math
+import queue
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote
@@ -9,7 +11,7 @@ from urllib.parse import quote
 from .logger import get_logger
 from .http_client import get as http_get
 from .roi_parser import get_bbox_tuple
-from config import NGAC_SEARCH_PAGE, ONEGEOLOGY_URL
+from config import NGAC_SEARCH_PAGE, ONEGEOLOGY_URL, GEOLOGY_MAP_TIMEOUT
 
 logger = get_logger("geo")
 
@@ -36,6 +38,39 @@ def _num2deg(x: float, y: float, z: int):
     lon = x / n * 360.0 - 180.0
     lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
     return lon, lat
+
+
+def _fetch_geology_map_with_timeout(roi: Dict[str, Any], output_dir: Path) -> Optional[Dict[str, Any]]:
+    """Run geology tile rendering with a hard wall-clock timeout.
+
+    External tile services can occasionally hang below requests' per-call timeout.
+    The geology map is optional, so timeout here should degrade to links and let
+    the rest of the collection pipeline continue.
+    """
+    result_q = queue.Queue(maxsize=1)
+
+    def worker():
+        try:
+            result_q.put((True, fetch_geology_map(roi, output_dir)), block=False)
+        except Exception as exc:
+            result_q.put((False, exc), block=False)
+
+    timeout = max(1, int(GEOLOGY_MAP_TIMEOUT or 90))
+    thread = threading.Thread(target=worker, name="geology-map-fetch", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        logger.warning("地质图出图超过 %ss，降级为在线查看链接", timeout)
+        return None
+    try:
+        ok, payload = result_q.get_nowait()
+    except queue.Empty:
+        logger.warning("地质图出图无返回，降级为在线查看链接")
+        return None
+    if ok:
+        return payload
+    logger.warning("地质图出图失败: %s", payload)
+    return None
 
 
 def fetch_geology_map(roi: Dict[str, Any], output_dir: Path) -> Optional[Dict[str, Any]]:
@@ -321,7 +356,7 @@ def fetch_all_geological(
         "ngac_geochem": generate_ngac_geochem_links(roi, mineral),
         "cnki": generate_cnki_links(roi, mineral, mineral_info, location),
         "onegeology": generate_onegeology_link(roi),
-        "geology_map": fetch_geology_map(roi, output_dir),
+        "geology_map": _fetch_geology_map_with_timeout(roi, output_dir),
         "map_sheet": _get_1m_map_sheet(roi),
     }
 
